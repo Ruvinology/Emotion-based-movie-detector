@@ -10,8 +10,12 @@ import requests
 # === Load and Preprocess Data ===
 @st.cache_data
 def load_and_prepare_data():
-    movies_df = pd.read_csv(r'C:\Users\Ruvin\Desktop\movies detector project\tmdb_5000_movies.csv')
-    credits_df = pd.read_csv(r'C:\Users\Ruvin\Desktop\movies detector project\tmdb_5000_credits.csv')
+    
+    movies_url = f"https://drive.google.com/uc?export=download&id=1Z0yMfy5AiWy6Dx_qUA403LM8EwKDT1Iw"
+    credits_url = f"https://drive.google.com/uc?export=download&id=1aQyDihszwK3ucaOEpcVZOyaTCxUs_PVw"
+
+    movies_df = pd.read_csv(movies_url)
+    credits_df = pd.read_csv(credits_url)
     movies_df = movies_df.merge(credits_df, left_on='title', right_on='title')
 
     def extract_names(x):
@@ -137,3 +141,4 @@ if selected_movie:
                     st.markdown(f"**→ {rec['title']}**  | Mood: _{rec['mood']}_ | Score: `{rec['score']}`")
             else:
                 st.error(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
+
