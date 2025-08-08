@@ -1,3 +1,6 @@
+import nltk
+nltk.download('punkt')
+
 import pandas as pd
 import ast
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -141,4 +144,5 @@ if selected_movie:
                     st.markdown(f"**→ {rec['title']}**  | Mood: _{rec['mood']}_ | Score: `{rec['score']}`")
             else:
                 st.error(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
+
 
