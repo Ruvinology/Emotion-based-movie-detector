@@ -1,5 +1,9 @@
 import nltk
-nltk.download('punkt')
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('punkt_tab') 
 
 import pandas as pd
 import ast
@@ -144,5 +148,6 @@ if selected_movie:
                     st.markdown(f"**→ {rec['title']}**  | Mood: _{rec['mood']}_ | Score: `{rec['score']}`")
             else:
                 st.error(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
+
 
 
