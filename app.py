@@ -110,11 +110,11 @@ def recommend_movies_by_mood(title, user_mood, num_recommendations=5):
 
 
 # === Streamlit UI ===
-st.title("🎥 Mood-Based Movie Detector")
+st.title("🎥 CinePulse")
 
 # Auto-complete search bar for movie titles
 movie_titles = movies_df['title'].tolist()  # List of all movie titles in the dataset
-movie_input = st.text_input("Enter a movie title:", "")
+movie_input = st.text_input("Enter a movie:", "")
 
 # Filter movie titles based on user input
 matching_titles = [title for title in movie_titles if movie_input.lower() in title.lower()]
@@ -130,7 +130,7 @@ if selected_movie:
     st.write(f"Selected movie: **{selected_movie}**")
 
     # Detect user mood based on text input
-    mood_input = st.text_area("How are you feeling right now? (e.g., I'm tired and stressed)")
+    mood_input = st.text_area("How are you feeling right now?")
 
     if st.button("Recommend Movies"):
         if not movie_input or not mood_input:
@@ -143,11 +143,12 @@ if selected_movie:
             recommendations = recommend_movies_by_mood(selected_movie, detected_mood, 5)
 
             if recommendations:
-                st.subheader(f"🎯 Top Recommendations for '{selected_movie}' with mood '{detected_mood}':")
+                st.subheader(f"🎯Recommendations for '{selected_movie}' with mood '{detected_mood}':")
                 for rec in recommendations:
                     st.markdown(f"**→ {rec['title']}**  | Mood: _{rec['mood']}_ | Score: `{rec['score']}`")
             else:
                 st.error(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
+
 
 
 
