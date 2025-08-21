@@ -126,9 +126,9 @@ h1, h2, h3, h4, h5 {
 
 /* Text input */
 .stTextInput>div>div>input {
-    background-color: rgba(255, 255, 255, 0.9);
+    background-color: rgba(240,242,246,255);
     color: #000000;
-    border: 1px solid #ffdd00;
+    border: 1px solid #f0f2f6;
     border-radius: 8px;
     padding: 8px;
     outline: none !important; 
@@ -137,14 +137,14 @@ h1, h2, h3, h4, h5 {
 .stTextInput>div>div>input:focus {
     outline: none !important;
     box-shadow: none !important;
-    border: 1px solid #ffdd00;
+    border: 1px solid ;
 }
 
 /* Selectbox */
 .stSelectbox>div>div>div>div {
-    background-color: rgba(255, 255, 255, 0.9);
+    background-color: rgba(240,242,246,255);
     color: #000000;
-    border: 1px solid #ffdd00;
+    border: 1px solid #f0f2f6;
     border-radius: 8px;
     outline: none !important;
     box-shadow: none !important;
@@ -152,7 +152,7 @@ h1, h2, h3, h4, h5 {
 .stSelectbox>div>div>div>div:focus {
     outline: none !important;
     box-shadow: none !important;
-    border: 1px solid #ffdd00;
+    border: 1px solid ;
 }
 
 /* Warnings */
@@ -260,4 +260,4 @@ if selected_movie:
                 st.warning(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
 
             if st.button("🔄 Search Again"):
-                st.experimental_rerun()  ,
+                st.experimental_rerun()
