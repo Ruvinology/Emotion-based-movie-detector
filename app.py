@@ -1,230 +1,251 @@
-import nltk
-
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('punkt_tab')
-
-import pandas as pd
+from pathlib import Path
 import ast
+import zipfile
+
+import nltk
+import pandas as pd
+import streamlit as st
+from nrclex import NRCLex
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from nrclex import NRCLex
-import streamlit as st
-import requests
 
-# === Load and Preprocess Data ===
-@st.cache_data
-def load_and_prepare_data():
-    movies_url = f"https://drive.google.com/uc?export=download&id=1Z0yMfy5AiWy6Dx_qUA403LM8EwKDT1Iw"
-    credits_url = f"https://drive.google.com/uc?export=download&id=1aQyDihszwK3ucaOEpcVZOyaTCxUs_PVw"
 
-    movies_df = pd.read_csv(movies_url)
-    credits_df = pd.read_csv(credits_url)
-    movies_df = movies_df.merge(credits_df, left_on='title', right_on='title')
+st.set_page_config(page_title="CinePulse", page_icon="🎥", layout="centered")
 
-    def extract_names(x):
+
+@st.cache_resource
+def prepare_nltk() -> None:
+    """Download only the tokenizer resources NRCLex needs."""
+    resources = (
+        ("tokenizers/punkt", "punkt"),
+        ("tokenizers/punkt_tab", "punkt_tab"),
+    )
+
+    for lookup_path, package_name in resources:
         try:
-            return [d['name'] for d in ast.literal_eval(x)]
-        except:
-            return []
+            nltk.data.find(lookup_path)
+        except LookupError:
+            downloaded = nltk.download(package_name, quiet=True)
+            if not downloaded:
+                raise RuntimeError(
+                    f"NLTK could not download the required resource: {package_name}"
+                )
 
-    movies_df['genres'] = movies_df['genres'].apply(extract_names)
-    movies_df['keywords'] = movies_df['keywords'].apply(extract_names)
-    movies_df['cast'] = movies_df['cast'].apply(lambda x: [d['name'] for d in ast.literal_eval(x)][:3])
 
-    def get_director(crew_str):
-        try:
-            crew = ast.literal_eval(crew_str)
-            for member in crew:
-                if member['job'] == 'Director':
-                    return member['name']
-            return ''
-        except:
-            return ''
+def extract_names(value, limit=None):
+    """Safely extract name values from TMDB JSON-like columns."""
+    if not isinstance(value, str) or not value.strip():
+        return []
 
-    movies_df['director'] = movies_df['crew'].apply(get_director)
+    try:
+        records = ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return []
 
-    def combine_features(row):
-        return ' '.join(row['genres']) + ' ' + ' '.join(row['keywords']) + ' ' + ' '.join(row['cast']) + ' ' + row[
-            'director'] + ' ' + str(row['overview'])
+    names = [
+        record.get("name", "")
+        for record in records
+        if isinstance(record, dict) and record.get("name")
+    ]
+    return names[:limit] if limit else names
 
-    movies_df['tags'] = movies_df.apply(combine_features, axis=1)
-    movies_df['tags'] = movies_df['tags'].fillna('')
 
-    tfidf = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(movies_df['tags'])
+def extract_director(value):
+    if not isinstance(value, str) or not value.strip():
+        return ""
 
-    similarity = cosine_similarity(tfidf_matrix)
+    try:
+        crew = ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return ""
 
-    def detect_emotion(text):
-        if not isinstance(text, str) or len(text.strip()) == 0:
-            return "neutral"
-        emotions = NRCLex(text).top_emotions
-        if emotions:
-            return emotions[0][0]
+    for member in crew:
+        if isinstance(member, dict) and member.get("job") == "Director":
+            return member.get("name", "")
+    return ""
+
+
+def detect_emotion(text):
+    if not isinstance(text, str) or not text.strip():
         return "neutral"
 
-    movies_df['emotion'] = movies_df['overview'].apply(detect_emotion)
+    try:
+        top_emotions = NRCLex(text).top_emotions
+    except Exception:
+        return "neutral"
 
-    return movies_df, similarity
+    if not top_emotions or top_emotions[0][1] <= 0:
+        return "neutral"
+    return top_emotions[0][0]
 
-# Load data
-movies_df, similarity = load_and_prepare_data()
 
-# === Streamlit CSS Styling with Cinematic Background Image ===
+@st.cache_data(show_spinner="Loading and analysing the movie dataset...")
+def load_and_prepare_data():
+    """Load both CSV files directly from the ZIP included in the repository."""
+    data_zip = Path(__file__).resolve().parent / "data" / "tmdb_5000_credits.zip"
+
+    if not data_zip.exists():
+        raise FileNotFoundError(
+            "Dataset not found. Expected data/tmdb_5000_credits.zip in the repository."
+        )
+
+    with zipfile.ZipFile(data_zip) as archive:
+        required_files = {
+            "tmdb_5000_movies.csv",
+            "tmdb_5000_credits.csv",
+        }
+        missing_files = required_files.difference(archive.namelist())
+        if missing_files:
+            raise FileNotFoundError(
+                "The dataset ZIP is missing: " + ", ".join(sorted(missing_files))
+            )
+
+        with archive.open("tmdb_5000_movies.csv") as movies_file:
+            movies_df = pd.read_csv(movies_file)
+        with archive.open("tmdb_5000_credits.csv") as credits_file:
+            credits_df = pd.read_csv(credits_file)
+
+    movies_df = movies_df.merge(credits_df, on="title", how="inner")
+    movies_df["overview"] = movies_df["overview"].fillna("")
+    movies_df["genres"] = movies_df["genres"].apply(extract_names)
+    movies_df["keywords"] = movies_df["keywords"].apply(extract_names)
+    movies_df["cast"] = movies_df["cast"].apply(lambda value: extract_names(value, 3))
+    movies_df["director"] = movies_df["crew"].apply(extract_director)
+
+    movies_df["tags"] = movies_df.apply(
+        lambda row: " ".join(
+            row["genres"]
+            + row["keywords"]
+            + row["cast"]
+            + [row["director"], row["overview"]]
+        ),
+        axis=1,
+    )
+
+    vectorizer = TfidfVectorizer(stop_words="english", max_features=12000)
+    tfidf_matrix = vectorizer.fit_transform(movies_df["tags"])
+    movies_df["emotion"] = movies_df["overview"].apply(detect_emotion)
+
+    return movies_df, tfidf_matrix
+
+
+prepare_nltk()
+
+try:
+    movies_df, tfidf_matrix = load_and_prepare_data()
+except Exception as error:
+    st.error("The application could not load its movie data.")
+    st.exception(error)
+    st.stop()
+
+
 st.markdown(
-"""
-<style>
-/* Full-page background image with gradient overlay */
-body {
-    background: 
-        linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)),
-        url('https://images.unsplash.com/photo-1601758123927-35b2a43bb9c2?auto=format&fit=crop&w=1950&q=80');
-    background-size: cover;
-    background-position: center;
-    background-attachment: fixed;
-    color: #ffffff;
-}
-
-/* Main container styling */
-.css-18e3th9 {
-    background: rgba(0, 0, 0, 0.6);  /* semi-transparent dark overlay */
-    padding: 20px;
-    border-radius: 15px;
-    box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-}
-
-/* Headings */
-h1, h2, h3, h4, h5 {
-    color: #ffdd00;
-}
-
-/* Buttons */
-.stButton>button {
-    background: linear-gradient(90deg, #ff416c, #ff4b2b);
-    color: white !important;           /* Text always visible */
-    border-radius: 10px;
-    height: 45px;
-    width: 220px;
-    font-size: 16px;
-    font-weight: bold;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-    transition: transform 0.2s, color 0.2s;
-}
-.stButton>button:hover {
-    transform: scale(1.05);
-    cursor: pointer;
-    color: white !important;
-}
-.stButton>button:active {
-    transform: scale(0.98);
-    color: white !important;
-    background: linear-gradient(90deg, #ff416c, #ff4b2b);
-}
-
-/* Text input */
-.stTextInput>div>div>input {
-    background-color: rgba(240,242,246,255);
-    color: #000000;
-    border: 1px solid #f0f2f6;
-    border-radius: 8px;
-    padding: 8px;
-    outline: none !important; 
-    box-shadow: none !important;
-}
-.stTextInput>div>div>input:focus {
-    outline: none !important;
-    box-shadow: none !important;
-    border: 1px solid ;
-}
-
-/* Selectbox */
-.stSelectbox>div>div>div>div {
-    background-color: rgba(240,242,246,255);
-    color: #000000;
-    border: 1px solid #f0f2f6;
-    border-radius: 8px;
-    outline: none !important;
-    box-shadow: none !important;
-}
-.stSelectbox>div>div>div>div:focus {
-    outline: none !important;
-    box-shadow: none !important;
-    border: 1px solid ;
-}
-
-/* Warnings */
-.stWarning {
-    background-color: rgba(255, 0, 0, 0.3);
-    border-left: 5px solid #ff0000;
-}
-</style>
-""",
-unsafe_allow_html=True
+    """
+    <style>
+    .stApp {
+        background:
+            linear-gradient(rgba(0,0,0,0.68), rgba(0,0,0,0.68)),
+            url('https://images.unsplash.com/photo-1601758123927-35b2a43bb9c2?auto=format&fit=crop&w=1950&q=80');
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+        color: white;
+    }
+    h1, h2, h3 { color: #ffdd00; }
+    .stButton > button {
+        border-radius: 10px;
+        min-height: 45px;
+        font-size: 16px;
+        font-weight: 700;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
+MOOD_GROUPS = {
+    "happy": {"joy", "positive", "trust", "anticipation"},
+    "sad": {"sadness", "negative"},
+    "anger": {"anger", "negative"},
+    "fear": {"fear", "negative"},
+    "surprise": {"surprise", "anticipation"},
+    "relaxed": {"trust", "positive"},
+    "neutral": {"neutral"},
+    "bored": {"neutral", "sadness"},
+    "disgust": {"disgust", "negative"},
+    "joy": {"joy", "positive"},
+    "heartbroken": {"sadness", "negative"},
+    "frustrated": {"anger", "negative"},
+}
 
-# === Helper Functions ===
-def recommend_movies_by_mood(title, user_mood, num_recommendations=5):
-    try:
-        idx = movies_df[movies_df['title'].str.lower() == title.lower()].index[0]
-    except IndexError:
+
+def recommend_movies_by_mood(title, user_mood, number=5):
+    title_matches = movies_df.index[
+        movies_df["title"].str.casefold() == title.casefold()
+    ].tolist()
+    if not title_matches:
         return []
 
-    sim_scores = list(enumerate(similarity[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    selected_index = title_matches[0]
+    scores = cosine_similarity(
+        tfidf_matrix[selected_index], tfidf_matrix
+    ).ravel()
+    ranked_indices = scores.argsort()[::-1]
+    allowed_emotions = MOOD_GROUPS.get(user_mood, {"neutral"})
 
-    # Relaxed mood matching
-    mood_groups = {
-        "happy": ["happy", "joy", "excited", "trust", "relaxed"],
-        "sad": ["sad", "heartbroken", "neutral"],
-        "anger": ["anger", "frustrated"],
-        "fear": ["fear", "surprised"],
-        "bored": ["bored", "neutral"],
-        "disgust": ["disgust"],
-        "neutral": ["neutral"]
-    }
+    preferred = []
+    fallback = []
 
-    mood_filtered = [
-        (i, score) for i, score in sim_scores[1:]
-        if movies_df.iloc[i]['emotion'] in mood_groups.get(user_mood.lower(), [])
-    ]
+    for movie_index in ranked_indices:
+        if movie_index == selected_index:
+            continue
 
-    mood_filtered = mood_filtered[:num_recommendations]
+        recommendation = {
+            "title": movies_df.iloc[movie_index]["title"],
+            "score": round(float(scores[movie_index]), 3),
+            "mood": movies_df.iloc[movie_index]["emotion"],
+            "poster_path": movies_df.iloc[movie_index].get("poster_path"),
+        }
 
-    results = []
-    for i, score in mood_filtered:
-        results.append({
-            'title': movies_df.iloc[i]['title'],
-            'score': round(score, 3),
-            'mood': movies_df.iloc[i]['emotion'],
-            'poster_path': movies_df.iloc[i].get('poster_path', None)  # Use poster if available
-        })
+        fallback.append(recommendation)
+        if recommendation["mood"] in allowed_emotions:
+            preferred.append(recommendation)
 
-    return results
+        if len(preferred) >= number:
+            break
 
-# === Streamlit UI ===
+    # Avoid an empty screen when the dataset has too few exact mood matches.
+    selected = preferred[:]
+    used_titles = {item["title"] for item in selected}
+    for item in fallback:
+        if len(selected) >= number:
+            break
+        if item["title"] not in used_titles:
+            selected.append(item)
+            used_titles.add(item["title"])
+
+    return selected[:number]
+
+
 st.title("🎥 CinePulse")
+st.caption("Movie recommendations based on similarity and your current mood")
 
-# Auto-complete search bar for movie titles
-movie_titles = movies_df['title'].tolist()
-movie_input = st.text_input("Enter a movie:", "")
+movie_titles = sorted(movies_df["title"].dropna().unique().tolist())
+movie_input = st.text_input("Enter a movie", placeholder="Example: Avatar")
 
-# Filter movie titles based on user input
-matching_titles = [title for title in movie_titles if movie_input.lower() in title.lower()]
+selected_movie = None
+if movie_input.strip():
+    matching_titles = [
+        title for title in movie_titles if movie_input.casefold() in title.casefold()
+    ][:100]
 
-if movie_input:
-    selected_movie = st.selectbox("Select a movie", matching_titles)
-else:
-    selected_movie = None
+    if matching_titles:
+        selected_movie = st.selectbox("Select a movie", matching_titles)
+    else:
+        st.warning("No movie title matches your search.")
 
 if selected_movie:
-    st.write(f"Selected movie: **{selected_movie}**")
-
-    # Mood input with emojis
     mood_options = {
         "😊 Happy": "happy",
         "😢 Sad": "sad",
@@ -238,26 +259,31 @@ if selected_movie:
         "🤩 Excited": "joy",
         "😭 Heartbroken": "heartbroken",
         "😖 Frustrated": "frustrated",
-        "😶 Speechless": "neutral"
     }
 
-    mood_input_label = st.selectbox("How are you feeling right now?", options=list(mood_options.keys()))
-    detected_mood = mood_options[mood_input_label]
+    mood_label = st.selectbox(
+        "How are you feeling right now?", list(mood_options.keys())
+    )
 
-    if st.button("Recommend Movies"):
-        if not movie_input:
-            st.warning("Please enter a movie.")
+    if st.button("Recommend Movies", type="primary"):
+        recommendations = recommend_movies_by_mood(
+            selected_movie, mood_options[mood_label], 5
+        )
+
+        if not recommendations:
+            st.warning("No recommendations were found for that movie.")
         else:
-            recommendations = recommend_movies_by_mood(selected_movie, detected_mood, 5)
-
-            if recommendations:
-                st.subheader(f"🎯 Recommendations for '{selected_movie}':")
-                for rec in recommendations:
-                    if rec['poster_path']:
-                        st.image(f"https://image.tmdb.org/t/p/w200{rec['poster_path']}", width=100)
-                    st.markdown(f"**→ {rec['title']}**  | Mood: _{rec['mood']}_ | Score: `{rec['score']}`")
-            else:
-                st.warning(f"No matching movies found for '{selected_movie}' with mood '{detected_mood}'.")
-
-            if st.button("🔄 Search Again"):
-                st.experimental_rerun()
+            st.subheader(f"🎯 Recommendations for {selected_movie}")
+            for recommendation in recommendations:
+                poster_path = recommendation["poster_path"]
+                if isinstance(poster_path, str) and poster_path.strip():
+                    st.image(
+                        f"https://image.tmdb.org/t/p/w200{poster_path}",
+                        width=120,
+                    )
+                st.markdown(
+                    f"**{recommendation['title']}**  \n"
+                    f"Detected emotion: `{recommendation['mood']}` · "
+                    f"Similarity: `{recommendation['score']}`"
+                )
+                st.divider()
